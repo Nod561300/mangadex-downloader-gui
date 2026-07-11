@@ -6,8 +6,10 @@ import type { QueueItem } from './useQueueState'
 let unlistenLog: (() => void) | null = null
 let unlistenPage: (() => void) | null = null
 let unlistenChapter: (() => void) | null = null
+let listenerCount = 0
 
 async function setupListeners() {
+  if (listenerCount++ > 0) return  // ป้องกัน double-listen
   unlistenLog = await listen<string>('download-log', (e) => {
     const item = queueState.items.find((i) => i.id === queueState.activeItemId)
     if (item) item.log.push(e.payload)
@@ -23,6 +25,7 @@ async function setupListeners() {
 }
 
 function teardownListeners() {
+  listenerCount = 0
   unlistenLog?.(); unlistenPage?.(); unlistenChapter?.()
   unlistenLog = null; unlistenPage = null; unlistenChapter = null
 }
@@ -32,6 +35,7 @@ async function runItem(item: QueueItem, command: string, chapters: any[]) {
   item.chapterProgress = { completed: 0, total: chapters.length }
   item.pageProgress = { label: '', current: 0, total: 0 }
   item.log = []
+  item.problems = []
   queueState.activeItemId = item.id
   queueState.expanded = true
 
@@ -53,17 +57,20 @@ async function runItem(item: QueueItem, command: string, chapters: any[]) {
   }
 }
 
+async function runQueue() {
+  while (true) {
+    const next = queueState.items.find((i) => i.status === 'waiting')
+    if (!next) break
+    await runItem(next, 'start_download', next.chapters)
+  }
+}
+
 export async function startQueue() {
   if (queueState.isRunning) return
   queueState.isRunning = true
   await setupListeners()
-
   try {
-    while (true) {
-      const next = queueState.items.find((i) => i.status === 'waiting')
-      if (!next) break
-      await runItem(next, 'start_download', next.chapters)
-    }
+    await runQueue()
   } finally {
     teardownListeners()
     queueState.isRunning = false
@@ -73,46 +80,64 @@ export async function startQueue() {
 
 export async function retryItem(id: string) {
   const item = queueState.items.find((i) => i.id === id)
-  if (!item || item.status === 'downloading') return
+  if (!item) return
+  if (item.status === 'downloading') return  // กำลังโหลดอยู่ ข้ามไป
 
-  // โหลดเฉพาะตอนที่มี failed_pages — skip ไฟล์ที่มีแล้วอยู่แล้วใน Rust
   const failedChapters = item.problems
     .filter((p) => p.failed_pages !== 0)
-    .map((p) => ({ id: p.chapter_id, chapter: p.label.match(/Ch\.(.+?) \(/)?.[1] ?? null }))
+    .map((p) => ({
+      id: p.chapter_id,
+      chapter: p.label.match(/Ch\.(.+?) \(/)?.[1] ?? null,
+      title: null,
+      pages: 0,
+    }))
 
   if (failedChapters.length === 0) return
 
-  item.problems = []
-
   if (queueState.isRunning) {
-    // ถ้า queue กำลังวิ่งอยู่ ให้รอ — แทรก waiting item แล้วปล่อยให้ loop หยิบไปเอง
-    // แต่เราต้องการ retry เฉพาะตอนที่พัง ไม่ใช่ทั้งเรื่อง
-    // ใช้วิธี clone item ใหม่ที่มีแค่ failedChapters
-    const { addToQueue } = await import('./useQueueState')
-    addToQueue(item.manga, failedChapters.map(fc => ({
-      id: fc.id,
-      chapter: fc.chapter,
-      title: null,
-      pages: 0,
-    })), item.outputDir)
+    // queue กำลังวิ่ง — mark item กลับเป็น waiting แต่เปลี่ยน chapters เป็น failedChapters เท่านั้น
+    item.chapters = failedChapters as any
+    item.chapterProgress = { completed: 0, total: failedChapters.length }
+    item.problems = []
+    item.status = 'waiting'
+    // loop ใน startQueue จะหยิบไปรันเองเมื่อถึงคิว
   } else {
-    // queue หยุดอยู่ — รัน retry โดยตรงแล้วเริ่ม queue ใหม่
-    await setupListeners()
+    // queue หยุด — รัน retry แล้วต่อด้วย waiting items ที่เหลือ
     queueState.isRunning = true
+    await setupListeners()
     try {
       await runItem(item, 'retry_failed_pages', failedChapters)
-      // รัน waiting items ที่เหลือต่อ
-      while (true) {
-        const next = queueState.items.find((i) => i.status === 'waiting')
-        if (!next) break
-        await runItem(next, 'start_download', next.chapters)
-      }
+      await runQueue()  // รัน waiting items ที่เหลือต่อ
     } finally {
       teardownListeners()
       queueState.isRunning = false
       queueState.activeItemId = null
     }
   }
+}
+
+export async function retryAll() {
+  const errorItems = queueState.items.filter((i) => i.status === 'error')
+  if (errorItems.length === 0) return
+
+  // mark ทุก error item เป็น waiting พร้อม failedChapters
+  for (const item of errorItems) {
+    const failedChapters = item.problems
+      .filter((p) => p.failed_pages !== 0)
+      .map((p) => ({
+        id: p.chapter_id,
+        chapter: p.label.match(/Ch\.(.+?) \(/)?.[1] ?? null,
+        title: null,
+        pages: 0,
+      }))
+    if (failedChapters.length === 0) continue
+    item.chapters = failedChapters as any
+    item.chapterProgress = { completed: 0, total: failedChapters.length }
+    item.problems = []
+    item.status = 'waiting'
+  }
+
+  await startQueue()
 }
 
 export async function cancelCurrent() {

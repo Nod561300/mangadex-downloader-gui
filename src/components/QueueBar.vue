@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { queueState, removeFromQueue, clearDone, activeItem } from '../composables/useQueueState'
-import { startQueue, cancelCurrent, retryItem } from '../composables/useQueueRunner'
+import { startQueue, cancelCurrent, retryItem, retryAll } from '../composables/useQueueRunner'
 
 const statusLabel: Record<string, string> = {
   waiting: '⏳ รอ',
@@ -32,18 +32,16 @@ function toggleExpand() {
   queueState.expanded = !queueState.expanded
 }
 
-async function retryAll() {
-  const errorItems = queueState.items.filter((i) => i.status === 'error')
-  for (const item of errorItems) {
-    await retryItem(item.id)
-  }
+function requeue(item: any) {
+  item.status = 'waiting'
+  startQueue()
 }
 </script>
 
 <template>
   <div class="queue-bar" :class="{ expanded: queueState.expanded }">
 
-    <!-- Header row -->
+    <!-- Header -->
     <div class="queue-header" @click="toggleExpand">
       <span class="queue-title">
         📋 คิว
@@ -66,7 +64,7 @@ async function retryAll() {
         <button v-if="queueState.isRunning" class="btn danger" @click="cancelCurrent">
           ⏹ หยุด
         </button>
-        <button v-if="!queueState.isRunning && errorCount > 0" class="btn ghost" @click="retryAll">
+        <button v-if="errorCount > 0" class="btn ghost" @click="retryAll">
           🔁 Retry ทั้งหมด
         </button>
         <button v-if="doneCount > 0" class="btn ghost" @click="clearDone">ล้างที่เสร็จ</button>
@@ -91,12 +89,12 @@ async function retryAll() {
 
         <div class="queue-item-main">
           <span class="queue-item-title">{{ item.manga.title }}</span>
-          <span class="queue-item-meta">{{ item.chapters.length }} ตอน</span>
+          <span class="queue-item-meta">{{ item.chapterProgress.total }} ตอน</span>
           <span class="queue-item-status">{{ statusLabel[item.status] }}</span>
 
-          <!-- Retry ปุ่มสำหรับ error item -->
+          <!-- ปุ่ม Retry รายการ — โชว์เสมอถ้า error ไม่ว่า queue จะ running หรือเปล่า -->
           <button
-            v-if="item.status === 'error' && !queueState.isRunning"
+            v-if="item.status === 'error'"
             class="btn ghost"
             style="font-size: 11px; padding: 3px 8px"
             @click.stop="retryItem(item.id)"
@@ -107,7 +105,7 @@ async function retryAll() {
             v-if="item.status === 'cancelled'"
             class="btn ghost"
             style="font-size: 11px; padding: 3px 8px"
-            @click.stop="() => { item.status = 'waiting'; startQueue() }"
+            @click.stop="requeue(item)"
           >↩ ลองใหม่</button>
 
           <button
