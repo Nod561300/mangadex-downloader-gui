@@ -2,6 +2,8 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 use tokio::time::{sleep, Duration};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 const MANGADEX_API: &str = "https://api.mangadex.org";
 const USER_AGENT: &str = "mangadex-downloader-gui/2.0 (personal use)";
@@ -10,6 +12,9 @@ const CONCURRENCY: usize = 3;
 
 // Sequential queue สำหรับ at-home/server เหมือนเดิม
 static AT_HOME_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
+
+// Global flag ให้ cancel download
+static CANCEL_DOWNLOAD: Lazy<Arc<Mutex<bool>>> = Lazy::new(|| Arc::new(Mutex::new(false)));
 #[derive(Deserialize)]
 pub struct ChapterInput {
     pub id: String,
@@ -51,6 +56,13 @@ pub struct DownloadResult {
     completed_chapters: u32,
     total: u32,
     problems: Vec<Problem>,
+}
+
+#[tauri::command]
+pub async fn cancel_download() -> Result<(), String> {
+    let mut cancelled = CANCEL_DOWNLOAD.lock().await;
+    *cancelled = true;
+    Ok(())
 }
 
 fn sanitize_folder_name(name: &str) -> String {
@@ -113,6 +125,11 @@ async fn download_chapter(
     label: &str,
     app: &AppHandle,
 ) -> Result<(u32, u32), String> {
+    // Check if cancelled before starting
+    if *CANCEL_DOWNLOAD.lock().await {
+        return Err("Download cancelled by user".into());
+    }
+
     let server = fetch_at_home_server(client, chapter_id).await?;
     let base_url = server["baseUrl"]
         .as_str()
@@ -153,6 +170,11 @@ async fn download_chapter(
     let mut failed = 0u32;
 
     for (i, filename) in pages.iter().enumerate() {
+        // Check if cancelled before each page
+        if *CANCEL_DOWNLOAD.lock().await {
+            return Err("Download cancelled by user".into());
+        }
+
         let page_num = format!("{:03}", i + 1);
         let ext = std::path::Path::new(filename)
             .extension()
@@ -211,6 +233,9 @@ pub async fn start_download(
     app: AppHandle,
     payload: DownloadPayload,
 ) -> Result<DownloadResult, String> {
+    // Reset cancel flag
+    *CANCEL_DOWNLOAD.lock().await = false;
+
     let total = payload.chapters.len() as u32;
     let target_dir =
         std::path::Path::new(&payload.output_dir).join(sanitize_folder_name(&payload.manga_title));
@@ -230,6 +255,11 @@ pub async fn start_download(
     let mut handles = Vec::new();
 
     for chapter in chapters {
+        // Check if cancelled before spawning new task
+        if *CANCEL_DOWNLOAD.lock().await {
+            break;
+        }
+
         let permit = semaphore
             .clone()
             .acquire_owned()

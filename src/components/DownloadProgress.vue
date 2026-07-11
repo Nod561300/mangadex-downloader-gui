@@ -65,6 +65,15 @@ async function startDownload() {
     state.isDownloading = false
   }
 }
+
+async function cancelDownload() {
+  try {
+    await invoke('cancel_download')
+    state.log.push('ยกเลิกการดาวน์โหลด...')
+  } catch (e: any) {
+    state.log.push(`Error cancelling: ${e}`)
+  }
+}
 </script>
 
 <template>
@@ -72,6 +81,13 @@ async function startDownload() {
     <div class="download-bar">
       <button class="btn primary large" :disabled="!canDownload" @click="startDownload">
         ดาวน์โหลดตอนที่เลือก ({{ state.selected.size }})
+      </button>
+      <button 
+        v-if="state.isDownloading"
+        class="btn danger large" 
+        @click="cancelDownload"
+      >
+        ⏹ หยุดดาวน์โหลด
       </button>
     </div>
 
