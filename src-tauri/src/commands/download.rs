@@ -10,11 +10,9 @@ const USER_AGENT: &str = "mangadex-downloader-gui/2.0 (personal use)";
 const AT_HOME_GAP_MS: u64 = 1000;
 const CONCURRENCY: usize = 3;
 
-// Sequential queue สำหรับ at-home/server เหมือนเดิม
 static AT_HOME_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
-
-// Global flag ให้ cancel download
 static CANCEL_DOWNLOAD: Lazy<Arc<Mutex<bool>>> = Lazy::new(|| Arc::new(Mutex::new(false)));
+
 #[derive(Deserialize)]
 pub struct ChapterInput {
     pub id: String,
@@ -44,10 +42,11 @@ pub struct ChapterProgress {
 
 #[derive(Serialize, Clone)]
 pub struct Problem {
-    label: String,
-    failed_pages: i32,
-    total: u32,
-    error: Option<String>,
+    pub chapter_id: String,
+    pub label: String,
+    pub failed_pages: i32,
+    pub total: u32,
+    pub error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -81,7 +80,6 @@ async fn fetch_at_home_server(
     client: &reqwest::Client,
     chapter_id: &str,
 ) -> Result<serde_json::Value, String> {
-    // lock ทำให้เป็น sequential + เว้น gap หลัง unlock
     let _guard = AT_HOME_LOCK.lock().await;
     let url = format!("{}/at-home/server/{}", MANGADEX_API, chapter_id);
     let mut retries = 4u32;
@@ -125,20 +123,13 @@ async fn download_chapter(
     label: &str,
     app: &AppHandle,
 ) -> Result<(u32, u32), String> {
-    // Check if cancelled before starting
     if *CANCEL_DOWNLOAD.lock().await {
         return Err("Download cancelled by user".into());
     }
 
     let server = fetch_at_home_server(client, chapter_id).await?;
-    let base_url = server["baseUrl"]
-        .as_str()
-        .ok_or("missing baseUrl")?
-        .to_string();
-    let hash = server["chapter"]["hash"]
-        .as_str()
-        .ok_or("missing hash")?
-        .to_string();
+    let base_url = server["baseUrl"].as_str().ok_or("missing baseUrl")?.to_string();
+    let hash = server["chapter"]["hash"].as_str().ok_or("missing hash")?.to_string();
     let pages: Vec<String> = server["chapter"]["data"]
         .as_array()
         .ok_or("missing data")?
@@ -147,53 +138,30 @@ async fn download_chapter(
         .collect();
 
     let chapter_dir = target_dir.join(sanitize_folder_name(label));
-    tokio::fs::create_dir_all(&chapter_dir)
-        .await
-        .map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(&chapter_dir).await.map_err(|e| e.to_string())?;
 
-    let existing: std::collections::HashSet<String> = tokio::fs::read_dir(&chapter_dir)
-        .await
-        .ok()
-        .map(|mut rd| {
-            let mut set = std::collections::HashSet::new();
-            // sync read สำหรับ initial scan
-            if let Ok(entries) = std::fs::read_dir(&chapter_dir) {
-                for e in entries.flatten() {
-                    set.insert(e.file_name().to_string_lossy().to_string());
-                }
-            }
-            set
-        })
+    let existing: std::collections::HashSet<String> = std::fs::read_dir(&chapter_dir)
+        .map(|entries| entries.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect())
         .unwrap_or_default();
 
     let total = pages.len() as u32;
     let mut failed = 0u32;
 
     for (i, filename) in pages.iter().enumerate() {
-        // Check if cancelled before each page
         if *CANCEL_DOWNLOAD.lock().await {
             return Err("Download cancelled by user".into());
         }
 
         let page_num = format!("{:03}", i + 1);
-        let ext = std::path::Path::new(filename)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("jpg");
+        let ext = std::path::Path::new(filename).extension().and_then(|e| e.to_str()).unwrap_or("jpg");
         let save_name = format!("page-{}.{}", page_num, ext);
 
         if !existing.contains(&save_name) {
             let image_url = format!("{}/data/{}/{}", base_url, hash, filename);
-
-            // retry 3 ครั้ง
             let mut ok = false;
+
             for _ in 0..3 {
-                match client
-                    .get(&image_url)
-                    .header("User-Agent", USER_AGENT)
-                    .send()
-                    .await
-                {
+                match client.get(&image_url).header("User-Agent", USER_AGENT).send().await {
                     Ok(res) if res.status().is_success() => {
                         if let Ok(bytes) = res.bytes().await {
                             let save_path = chapter_dir.join(&save_name);
@@ -208,82 +176,61 @@ async fn download_chapter(
                 sleep(Duration::from_millis(500)).await;
             }
 
-            if !ok {
-                failed += 1;
-            }
+            if !ok { failed += 1; }
             sleep(Duration::from_millis(250)).await;
         }
 
-        let _ = app.emit(
-            "page-progress",
-            PageProgress {
-                chapter_id: chapter_id.to_string(),
-                label: label.to_string(),
-                current: (i + 1) as u32,
-                total,
-            },
-        );
+        let _ = app.emit("page-progress", PageProgress {
+            chapter_id: chapter_id.to_string(),
+            label: label.to_string(),
+            current: (i + 1) as u32,
+            total,
+        });
     }
 
     Ok((total, failed))
 }
 
-#[tauri::command]
-pub async fn start_download(
+async fn run_download_pool(
     app: AppHandle,
-    payload: DownloadPayload,
-) -> Result<DownloadResult, String> {
-    // Reset cancel flag
-    *CANCEL_DOWNLOAD.lock().await = false;
-
-    let total = payload.chapters.len() as u32;
-    let target_dir =
-        std::path::Path::new(&payload.output_dir).join(sanitize_folder_name(&payload.manga_title));
-
-    tokio::fs::create_dir_all(&target_dir)
-        .await
-        .map_err(|e| e.to_string())?;
-
+    chapters: Vec<ChapterInput>,
+    target_dir: std::path::PathBuf,
+    log_prefix: &str,
+) -> DownloadResult {
+    let total = chapters.len() as u32;
     let client = reqwest::Client::new();
-    let chapters = payload.chapters;
-
-    // concurrency pool ด้วย semaphore
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(CONCURRENCY));
-    let problems = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<Problem>::new()));
-    let completed = std::sync::Arc::new(tokio::sync::Mutex::new(0u32));
-
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(CONCURRENCY));
+    let problems = Arc::new(Mutex::new(Vec::<Problem>::new()));
+    let completed = Arc::new(Mutex::new(0u32));
     let mut handles = Vec::new();
+    let log_prefix = log_prefix.to_string();
 
     for chapter in chapters {
-        // Check if cancelled before spawning new task
-        if *CANCEL_DOWNLOAD.lock().await {
-            break;
-        }
+        if *CANCEL_DOWNLOAD.lock().await { break; }
 
-        let permit = semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|e| e.to_string())?;
+        let permit = match semaphore.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => break,
+        };
+
         let client = client.clone();
         let target_dir = target_dir.clone();
         let app = app.clone();
         let problems = problems.clone();
         let completed = completed.clone();
-        let label = format!(
-            "Ch.{} ({})",
-            chapter.chapter.as_deref().unwrap_or("Oneshot"),
-            chapter.id
-        );
+        let log_prefix = log_prefix.clone();
+        let label = format!("Ch.{} ({})", chapter.chapter.as_deref().unwrap_or("Oneshot"), chapter.id);
+        let chapter_id = chapter.id.clone();
 
         let handle = tokio::spawn(async move {
             let _permit = permit;
-            let _ = app.emit("download-log", format!("กำลังโหลด: {}", label));
+            let _ = app.emit("download-log", format!("{}{}", log_prefix, label));
 
-            match download_chapter(&client, &chapter.id, &target_dir, &label, &app).await {
+            match download_chapter(&client, &chapter_id, &target_dir, &label, &app).await {
                 Ok((page_total, failed_pages)) => {
                     if failed_pages > 0 {
                         problems.lock().await.push(Problem {
+                            chapter_id: chapter_id.clone(),
                             label: label.clone(),
                             failed_pages: failed_pages as i32,
                             total: page_total,
@@ -293,6 +240,7 @@ pub async fn start_download(
                 }
                 Err(e) => {
                     problems.lock().await.push(Problem {
+                        chapter_id: chapter_id.clone(),
                         label: label.clone(),
                         failed_pages: -1,
                         total: 0,
@@ -303,29 +251,37 @@ pub async fn start_download(
 
             let mut c = completed.lock().await;
             *c += 1;
-            let _ = app.emit(
-                "chapter-progress",
-                ChapterProgress {
-                    completed: *c,
-                    total,
-                },
-            );
+            let _ = app.emit("chapter-progress", ChapterProgress { completed: *c, total });
         });
 
         handles.push(handle);
     }
 
-    for h in handles {
-        let _ = h.await;
-    }
+    for h in handles { let _ = h.await; }
 
     let problems = problems.lock().await.clone();
     let completed = *completed.lock().await;
 
-    Ok(DownloadResult {
-        ok: true,
-        completed_chapters: completed,
-        total,
-        problems,
-    })
+    DownloadResult { ok: true, completed_chapters: completed, total, problems }
+}
+
+#[tauri::command]
+pub async fn start_download(app: AppHandle, payload: DownloadPayload) -> Result<DownloadResult, String> {
+    *CANCEL_DOWNLOAD.lock().await = false;
+
+    let target_dir = std::path::Path::new(&payload.output_dir)
+        .join(sanitize_folder_name(&payload.manga_title));
+    tokio::fs::create_dir_all(&target_dir).await.map_err(|e| e.to_string())?;
+
+    Ok(run_download_pool(app, payload.chapters, target_dir, "กำลังโหลด: ").await)
+}
+
+#[tauri::command]
+pub async fn retry_failed_pages(app: AppHandle, payload: DownloadPayload) -> Result<DownloadResult, String> {
+    *CANCEL_DOWNLOAD.lock().await = false;
+
+    let target_dir = std::path::Path::new(&payload.output_dir)
+        .join(sanitize_folder_name(&payload.manga_title));
+
+    Ok(run_download_pool(app, payload.chapters, target_dir, "[Retry] กำลังโหลดซ้ำ: ").await)
 }

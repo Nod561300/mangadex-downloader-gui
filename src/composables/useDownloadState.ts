@@ -15,6 +15,7 @@ export interface MangaInfo {
 }
 
 export interface Problem {
+  chapter_id: string
   label: string
   failed_pages: number
   total: number

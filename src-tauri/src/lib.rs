@@ -1,6 +1,9 @@
 mod commands;
 
-use commands::{download::{start_download, cancel_download}, manga::{fetch_manga_info, fetch_chapters_for_lang}};
+use commands::{
+    download::{cancel_download, retry_failed_pages, start_download},
+    manga::{fetch_chapters_for_lang, fetch_manga_info},
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -12,6 +15,7 @@ pub fn run() {
             fetch_chapters_for_lang,
             start_download,
             cancel_download,
+            retry_failed_pages,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

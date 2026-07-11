@@ -19,6 +19,10 @@ const canDownload = computed(() =>
   state.selected.size > 0 && state.outputDir && !state.isDownloading
 )
 
+const retryableProblems = computed(() =>
+  state.problems.filter((p) => p.failed_pages !== 0)
+)
+
 let unlistenLog: (() => void) | null = null
 let unlistenPage: (() => void) | null = null
 let unlistenChapter: (() => void) | null = null
@@ -74,6 +78,37 @@ async function cancelDownload() {
     state.log.push(`Error cancelling: ${e}`)
   }
 }
+
+async function retryFailed() {
+  if (!state.manga || retryableProblems.value.length === 0) return
+
+  const chapters = retryableProblems.value.map((p) => ({
+    id: p.chapter_id,
+    chapter: p.label.match(/Ch\.(.+?) \(/)?.[1] ?? null,
+  }))
+
+  state.log = []
+  state.chapterProgress = { completed: 0, total: chapters.length }
+  state.pageProgress = { chapterId: '', label: '', current: 0, total: 0 }
+  state.isDownloading = true
+  state.phase = 'downloading'
+
+  try {
+    const result = await invoke<any>('retry_failed_pages', {
+      payload: {
+        manga_title: state.manga.title,
+        output_dir: state.outputDir,
+        chapters,
+      },
+    })
+    state.problems = result.problems
+    state.phase = 'done'
+  } catch (e: any) {
+    state.log.push(`Error: ${e}`)
+  } finally {
+    state.isDownloading = false
+  }
+}
 </script>
 
 <template>
@@ -82,9 +117,9 @@ async function cancelDownload() {
       <button class="btn primary large" :disabled="!canDownload" @click="startDownload">
         ดาวน์โหลดตอนที่เลือก ({{ state.selected.size }})
       </button>
-      <button 
+      <button
         v-if="state.isDownloading"
-        class="btn danger large" 
+        class="btn danger large"
         @click="cancelDownload"
       >
         ⏹ หยุดดาวน์โหลด
@@ -108,15 +143,18 @@ async function cancelDownload() {
       </div>
     </div>
 
-    <div v-if="state.problems.length > 0" class="problems">
-      <p class="problems-title">⚠ มีปัญหาระหว่างโหลด:</p>
+    <div v-if="retryableProblems.length > 0 && !state.isDownloading" class="problems">
+      <p class="problems-title">⚠ โหลดไม่สำเร็จ {{ retryableProblems.length }} ตอน</p>
       <ul>
-        <li v-for="p in state.problems" :key="p.label">
+        <li v-for="p in retryableProblems" :key="p.chapter_id">
           {{ p.label }} —
           <span v-if="p.error">{{ p.error }}</span>
-          <span v-else>โหลดไม่สำเร็จ {{ p.failed_pages }}/{{ p.total }} หน้า</span>
+          <span v-else>{{ p.failed_pages }}/{{ p.total }} หน้าพัง</span>
         </li>
       </ul>
+      <button class="btn ghost" style="margin-top: 8px" @click="retryFailed">
+        🔁 Retry {{ retryableProblems.length }} ตอน
+      </button>
     </div>
 
     <div v-if="state.log.length > 0" class="log-box">
