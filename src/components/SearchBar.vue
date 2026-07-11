@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { invoke } from '@tauri-apps/api/core'
 import { state, setChapters } from '../composables/useDownloadState'
+import { getLangLabel } from '../utils/langMeta'
 
 async function search() {
   if (!state.mangaId.trim()) return
@@ -62,7 +63,7 @@ async function onLangChange() {
       <label>ภาษา:</label>
       <select v-model="state.selectedLang" @change="onLangChange">
         <option v-for="lang in state.manga.available_langs" :key="lang" :value="lang">
-          {{ lang }}
+          {{ getLangLabel(lang) }}
         </option>
       </select>
     </div>
