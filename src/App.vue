@@ -3,12 +3,14 @@ import SearchBar from './components/SearchBar.vue'
 import ChapterList from './components/ChapterList.vue'
 import OutputDirPicker from './components/OutputDirPicker.vue'
 import DownloadProgress from './components/DownloadProgress.vue'
+import QueueBar from './components/QueueBar.vue'
 import { state } from './composables/useDownloadState'
 </script>
 
 <template>
   <div class="app">
     <SearchBar />
+
     <main class="content">
       <section v-if="state.phase === 'idle'" class="empty-state">
         <p>ใส่ Title ID แล้วกด "ค้นหา" เพื่อดูรายการตอนทั้งหมด</p>
@@ -28,5 +30,7 @@ import { state } from './composables/useDownloadState'
         <DownloadProgress />
       </section>
     </main>
+
+    <QueueBar />
   </div>
 </template>
