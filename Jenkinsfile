@@ -37,6 +37,7 @@ pipeline {
             steps {
                 sh '''
                     corepack enable || true
+                    corepack prepare pnpm@9.15.0 --activate
                     pnpm install --frozen-lockfile
                 '''
             }
