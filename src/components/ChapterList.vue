@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { state, toggleSelect, toggleSelectAll } from '../composables/useDownloadState'
+import Checkbox from './shared/Checkbox.vue'
 
 const allSelected = computed(() => state.selected.size === state.chapters.length && state.chapters.length > 0)
 </script>
@@ -17,7 +18,10 @@ const allSelected = computed(() => state.selected.size === state.chapters.length
 
     <div class="toolbar">
       <label class="checkbox-label">
-        <input type="checkbox" :checked="allSelected" @change="toggleSelectAll" />
+        <Checkbox
+          :model-value="allSelected"
+          @update:modelValue="toggleSelectAll"
+        />
         เลือกทั้งหมด ({{ state.selected.size }})
       </label>
     </div>
@@ -30,11 +34,10 @@ const allSelected = computed(() => state.selected.size === state.chapters.length
         :class="{ selected: state.selected.has(ch.id) }"
         @click="toggleSelect(ch.id)"
       >
-        <input
-          type="checkbox"
-          :checked="state.selected.has(ch.id)"
+        <Checkbox
+          :model-value="state.selected.has(ch.id)"
           @click.stop
-          @change="toggleSelect(ch.id)"
+          @update:modelValue="() => toggleSelect(ch.id)"
         />
         <span class="chapter-label">
           ตอนที่ {{ ch.chapter ?? 'Oneshot' }}

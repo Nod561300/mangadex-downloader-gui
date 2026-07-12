@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { queueState, removeFromQueue, clearDone, activeItem } from '../composables/useQueueState'
 import { startQueue, cancelCurrent, retryItem, retryAll } from '../composables/useQueueRunner'
+import Button from './shared/Button.vue'
 
 const statusLabel: Record<string, string> = {
   waiting: '⏳ รอ',
@@ -58,16 +59,34 @@ function requeue(item: any) {
       <span v-else-if="totalItems > 0" class="queue-active-label dim">เสร็จทั้งหมด</span>
 
       <div class="queue-header-actions" @click.stop>
-        <button v-if="!queueState.isRunning && waitingCount > 0" class="btn primary" @click="startQueue">
+        <Button
+          v-if="!queueState.isRunning && waitingCount > 0"
+          variant="primary"
+          @click="startQueue"
+        >
           ▶ เริ่ม
-        </button>
-        <button v-if="queueState.isRunning" class="btn danger" @click="cancelCurrent">
+        </Button>
+        <Button
+          v-if="queueState.isRunning"
+          variant="primary"
+          @click="cancelCurrent"
+        >
           ⏹ หยุด
-        </button>
-        <button v-if="errorCount > 0" class="btn ghost" @click="retryAll">
+        </Button>
+        <Button
+          v-if="errorCount > 0"
+          variant="ghost"
+          @click="retryAll"
+        >
           🔁 Retry ทั้งหมด
-        </button>
-        <button v-if="doneCount > 0" class="btn ghost" @click="clearDone">ล้างที่เสร็จ</button>
+        </Button>
+        <Button
+          v-if="doneCount > 0"
+          variant="ghost"
+          @click="clearDone"
+        >
+          ล้างที่เสร็จ
+        </Button>
       </div>
 
       <span class="queue-chevron">{{ queueState.expanded ? '▼' : '▲' }}</span>
@@ -93,27 +112,34 @@ function requeue(item: any) {
           <span class="queue-item-status">{{ statusLabel[item.status] }}</span>
 
           <!-- ปุ่ม Retry รายการ — โชว์เสมอถ้า error ไม่ว่า queue จะ running หรือเปล่า -->
-          <button
+          <Button
             v-if="item.status === 'error'"
-            class="btn ghost"
-            style="font-size: 11px; padding: 3px 8px"
+            variant="ghost"
+            class="queue-item-btn"
             @click.stop="retryItem(item.id)"
-          >🔁 Retry</button>
+          >
+            🔁 Retry
+          </Button>
 
           <!-- Re-queue สำหรับ cancelled -->
-          <button
+          <Button
             v-if="item.status === 'cancelled'"
-            class="btn ghost"
-            style="font-size: 11px; padding: 3px 8px"
+            variant="ghost"
+            class="queue-item-btn"
             @click.stop="requeue(item)"
-          >↩ ลองใหม่</button>
+          >
+            ↩ ลองใหม่
+          </Button>
 
-          <button
+          <Button
             v-if="['waiting', 'error', 'cancelled', 'done'].includes(item.status)"
+            variant="ghost"
             class="btn-icon"
             title="ลบออกจากคิว"
             @click.stop="removeFromQueue(item.id)"
-          >✕</button>
+          >
+            ✕
+          </Button>
         </div>
 
         <!-- Per-item progress -->

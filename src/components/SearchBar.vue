@@ -1,12 +1,22 @@
 <script setup lang="ts">
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import { state, setChapters } from '../composables/useDownloadState'
 import { getLangLabel } from '../utils/langMeta'
+import Button from './shared/Button.vue'
+import Input from './shared/Input.vue'
+import Select from './shared/Select.vue'
+import { computed } from 'vue'
 
 async function search() {
   if (!state.mangaId.trim()) return
   state.phase = 'loading'
   state.errorMessage = ''
+
+  if (!isTauri) {
+    state.phase = 'error'
+    state.errorMessage = 'Tauri runtime not available. Please run in the Tauri app environment.'
+    return
+  }
 
   try {
     const manga = await invoke<any>('fetch_manga_info', { mangaId: state.mangaId.trim() })
@@ -39,6 +49,10 @@ async function onLangChange() {
     state.errorMessage = e
   }
 }
+
+const langOptions = computed(() =>
+  state.manga?.available_langs.map((lang) => ({ label: getLangLabel(lang), value: lang })) || []
+)
 </script>
 
 <template>
@@ -48,24 +62,26 @@ async function onLangChange() {
       <span class="brand-name">MangaDex Downloader</span>
     </div>
     <div class="search-row">
-      <input
+      <Input
         v-model="state.mangaId"
-        type="text"
         placeholder="วาง Title ID หรือ URL จาก MangaDex"
-        autocomplete="off"
         @keyup.enter="search"
       />
-      <button class="btn primary" :disabled="state.phase === 'loading'" @click="search">
+      <Button
+        :disabled="state.phase === 'loading'"
+        variant="primary"
+        @click="search"
+      >
         {{ state.phase === 'loading' ? 'กำลังค้นหา...' : 'ค้นหา' }}
-      </button>
+      </Button>
     </div>
     <div v-if="state.manga && state.phase !== 'loading'" class="lang-row">
       <label>ภาษา:</label>
-      <select v-model="state.selectedLang" @change="onLangChange">
-        <option v-for="lang in state.manga.available_langs" :key="lang" :value="lang">
-          {{ getLangLabel(lang) }}
-        </option>
-      </select>
+      <Select
+        v-model="state.selectedLang"
+        :options="langOptions"
+        @update:model-value="onLangChange"
+      />
     </div>
   </header>
 </template>

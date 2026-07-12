@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, isTauri } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { queueState } from './useQueueState'
 import type { QueueItem } from './useQueueState'
@@ -38,6 +38,13 @@ async function runItem(item: QueueItem, command: string, chapters: any[]) {
   item.problems = []
   queueState.activeItemId = item.id
   queueState.expanded = true
+
+  if (!isTauri) {
+    item.log.push('Tauri runtime not available. Cannot start download from browser preview.')
+    item.status = 'error'
+    queueState.activeItemId = null
+    return
+  }
 
   try {
     const result = await invoke<any>(command, {
@@ -141,6 +148,10 @@ export async function retryAll() {
 }
 
 export async function cancelCurrent() {
+  if (!isTauri) {
+    return
+  }
+
   try {
     await invoke('cancel_download')
     const item = queueState.items.find((i) => i.id === queueState.activeItemId)

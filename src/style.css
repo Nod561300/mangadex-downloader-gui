@@ -305,6 +305,11 @@ html, body {
   border-radius: 3px;
 }
 
+.queue-item-btn {
+  font-size: 11px !important;
+  padding: 3px 8px !important;
+}
+
 .btn.danger {
   background: var(--stamp-dim);
   color: #fff;
