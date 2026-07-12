@@ -62,7 +62,7 @@ pipeline {
 
         stage('Convert clippy report for Sonar') {
             steps {
-                sh 'node scripts/clippy-to-sonar.js clippy-report.json clippy-sonar-report.json'
+                sh 'node scripts/clippy-to-sonar.cjs clippy-report.json clippy-sonar-report.json'
             }
         }
 
